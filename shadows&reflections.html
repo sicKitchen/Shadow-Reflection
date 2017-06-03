@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf=8" />
+    <title>Shadows & Refections</title>
+
+    <style>
+        body {
+            background-color : white;
+            font-family: "Arial Rounded MT Bold", "Helvetica Rounded", Arial, sans-serif;
+        }
+        h1 {
+            font-size : 1.2em;
+        }
+        footer {
+            font-size : 0.7em;
+            font-family: "Arial Rounded MT", "Helvetica Rounded", Arial, sans-serif;
+            font-style: italic;
+        }
+    </style>
+
+    <script src="matrix.js"></script>
+    <script src="bottle.js"></script>
+    <script src="glass.js"></script>
+    <script src="table.js"></script>
+    <!-- FOR DEBUGGING -->
+    <script src="webgl-debug.js"></script>
+
+    <script id="vertex" type="x-shader">
+      attribute vec3 vertexPosition;
+      attribute vec3 vertexNormal;
+      attribute vec2 vertexTexCoord;
+
+      varying vec2 texCoord;
+      varying vec4 color;
+
+      uniform mat4 ModelViewProjection;
+      uniform mat4 ModelViewMatrix;
+      uniform mat3 NormalMatrix;
+      uniform mat4 TextureMatrix;
+
+      uniform vec3 ambientLight;
+      uniform vec3 light0Color;
+      uniform vec4 light0Position;   // changed to vec4
+
+      uniform vec3 materialAmbient;
+      uniform vec3 materialDiffuse;
+      uniform vec3 materialSpecular;
+      uniform float materialShininess;
+
+      void main() {
+          gl_Position = ModelViewProjection*vec4(vertexPosition,1.0);
+          texCoord = (TextureMatrix*vec4(vertexTexCoord,0.0,1.0)).st;
+
+          vec3 P = vec3(ModelViewMatrix * vec4(vertexPosition,1.0));
+          vec3 N = normalize(NormalMatrix * vertexNormal);
+          vec3 L = normalize(light0Position.xyz - P);  // need to get the xyz out of vec4
+
+          vec3 I_ambient = materialAmbient * ambientLight;
+          float cos_theta = dot(L,N);
+          vec3 diffuseScale = light0Color * max(0.0, cos_theta);
+          vec3 I_diffuse = materialDiffuse * diffuseScale;
+          vec3 I_specular = vec3(0.0, 0.0, 0.0);
+
+          if (cos_theta > 0.0) {
+            vec3 R = reflect(-L,N);
+            vec3 V = normalize(-P);
+            float cos_alpha = dot(R,V);
+            I_specular = materialSpecular * light0Color *
+            pow(max(0.0, cos_alpha), materialShininess);
+          }
+
+          color = vec4(I_ambient + I_diffuse + I_specular, 1.0);
+      }
+</script>
+
+    <script id="fragment" type="x-shader">
+      precision highp float;
+      varying vec2 texCoord;
+      varying vec4 color;
+      uniform sampler2D texUnit;
+      void main() {
+         gl_FragColor = texture2D(texUnit, texCoord) * color;
+         //gl_FragColor = vec4(texCoord.s, texCoord.s, texCoord.s, 1.0);
+         //gl_FragColor = vec4(texCoord.t, texCoord.t, texCoord.t, 1.0);
+         //gl_FragColor = vec4(texCoord.s, texCoord.t, 0.0, 1.0);
+      }
+</script>
+
+<script>//-------------------------------------------------------------------------------
+var gl;
+var canvas;
+var program;
+var camera;
+var Model, View, Projection, Texture;
+// Need this for reflection & shadows
+var light0Position = [10.0, 10.0, 55.0, 1.0];
+
+//=========== CAMERA STUFF ======================
+function getMousePos(canvas, event) {
+    var rect = canvas.getBoundingClientRect();
+    return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top
+    };
+}
+
+var mouseDrag;
+function mouseDown(event) {
+    mouseDrag = getMousePos(canvas, event);
+}
+var radiansPerPixel = 0.01;
+var phiMin = -Math.PI/2 + 0.001;
+var phiMax = +Math.PI/2 - 0.001;
+var frame;
+
+function mouseMove(event) {
+    if (mouseDrag) {
+        var mousePos = getMousePos(canvas, event);
+        var dx = mousePos.x - mouseDrag.x;
+        var dy = mousePos.y - mouseDrag.y;
+        camera.theta += dx*radiansPerPixel;
+        camera.phi += dy*radiansPerPixel;
+        if (camera.phi < phiMin)
+            camera.phi = phiMin;
+        else if (camera.phi > phiMax)
+            camera.phi = phiMax;
+        mouseDrag = mousePos;
+        if (!frame)
+            frame = requestAnimationFrame(display);
+    }
+}
+
+function mouseUp(event) {
+    var mousePos = getMousePos(canvas, event);
+    mouseDrag = null;
+}
+
+//============== MAIN CODE =======================
+
+function init() {
+    // BOILERPLATE FROM SLIDES ------------------------------
+    canvas = document.getElementById("myCanvas");
+    gl = null;
+    try {
+        //gl = WebGLDebugUtils.makeDebugContext(canvas.getContext("experimental-webgl"));
+        // added in stencil buffer
+        gl = WebGLDebugUtils.makeDebugContext(canvas.getContext("webgl", {stencil : true}));
+    } catch(e) {gl = null;}
+    if (gl == null) {
+        alert("No WebGL -- bummer!");
+        return false;
+    }
+    canvas.addEventListener("mousedown", mouseDown, false);
+    canvas.addEventListener("mousemove", mouseMove, false);
+    document.body.addEventListener("mouseup", mouseUp, false);
+    var v = document.getElementById("vertex").firstChild.nodeValue;
+    var vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs,v);
+    gl.compileShader(vs);
+    if (!gl.getShaderParameter(vs,gl.COMPILE_STATUS)) {
+        alert(gl.getShaderInfoLog(vs));
+        return false;
+    }
+    var f = document.getElementById("fragment").firstChild.nodeValue;
+    var fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs,f);
+    gl.compileShader(fs);
+    if (!gl.getShaderParameter(fs,gl.COMPILE_STATUS)) {
+        alert(gl.getShaderInfoLog(fs));
+        return false;
+    }
+    program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.useProgram(program);
+
+    //================= BOTTLE ===================================
+    bottle.verts = new Float32Array(bottle.verts);
+    bottle.normals = new Float32Array(bottle.normals);
+    bottle.texCoords = new Float32Array(bottle.texCoords);
+    bottle.triangleStrip = new Uint16Array(bottle.triangleStrip);
+
+    bottle.vertbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bottle.vertbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, bottle.verts, gl.STATIC_DRAW);
+
+    bottle.normalbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bottle.normalbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, bottle.normals, gl.STATIC_DRAW);
+
+    bottle.texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, bottle.texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, bottle.texCoords, gl.STATIC_DRAW);
+
+    bottle.triangleStripBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bottle.triangleStripBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, bottle.triangleStrip, gl.STATIC_DRAW);
+
+    //===================== GLASS ==================================
+    glass.verts = new Float32Array(glass.verts);
+    glass.normals = new Float32Array(glass.normals);
+    glass.texCoords = new Float32Array(glass.texCoords);
+    glass.triangleStrip = new Uint16Array(glass.triangleStrip);
+
+    glass.vertbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, glass.vertbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, glass.verts, gl.STATIC_DRAW);
+
+    glass.normalbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, glass.normalbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, glass.normals, gl.STATIC_DRAW);
+
+    glass.texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, glass.texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, glass.texCoords, gl.STATIC_DRAW);
+
+    glass.triangleStripBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glass.triangleStripBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, glass.triangleStrip, gl.STATIC_DRAW);
+
+    //====================== TABLE ==================================
+    table.verts = new Float32Array(table.verts);
+    table.normals = new Float32Array(table.normals);
+    table.texCoords = new Float32Array(table.texCoords);
+    table.triangleStrip = new Uint16Array(table.triangleStrip);
+
+    table.vertbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, table.vertbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, table.verts, gl.STATIC_DRAW);
+
+    table.normalbuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, table.normalbuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, table.normals, gl.STATIC_DRAW);
+
+    table.texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, table.texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, table.texCoords, gl.STATIC_DRAW);
+
+    table.triangleStripBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, table.triangleStripBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, table.triangleStrip, gl.STATIC_DRAW);
+
+    //====================== SETUP ===================================
+    program.vertexPosition = gl.getAttribLocation(program, "vertexPosition");
+    program.vertexNormal = gl.getAttribLocation(program, "vertexNormal");
+    program.vertexTexCoord = gl.getAttribLocation(program, "vertexTexCoord");
+    program.ModelViewProjection = gl.getUniformLocation(program, "ModelViewProjection");
+    program.ModelViewMatrix = gl.getUniformLocation(program, "ModelViewMatrix");
+    program.NormalMatrix = gl.getUniformLocation(program, "NormalMatrix");
+    program.TextureMatrix = gl.getUniformLocation(program, "TextureMatrix");
+    program.ambientLight = gl.getUniformLocation(program, "ambientLight");
+    program.light0Color = gl.getUniformLocation(program, "light0Color");
+    program.light0Position = gl.getUniformLocation(program, "light0Position");
+    program.materialAmbient = gl.getUniformLocation(program, "materialAmbient");
+    program.materialDiffuse = gl.getUniformLocation(program, "materialDiffuse");
+    program.materialSpecular = gl.getUniformLocation(program, "materialSpecular");
+    program.materialShininess = gl.getUniformLocation(program, "materialShininess");
+    program.texUnit = gl.getUniformLocation(program, "texUnit");
+
+    gl.uniform1i(program.texUnit, 0);
+    gl.uniform3fv(program.materialAmbient,[0.1, 0.1, 0.1]);
+    gl.uniform3fv(program.materialDiffuse,[1, 1, 1]);
+    gl.uniform3fv(program.materialSpecular,[0.8, 0.8, 0.8]);
+    gl.uniform1f(program.materialShininess, 15.0);
+
+    gl.uniform3fv(program.ambientLight,[0.3, 0.3, 0.3]);
+    gl.uniform3fv(program.light0Color,[1.0, 1.0, 1.0]);
+
+    gl.uniform4fv(program.light0Position,light0Position);
+
+    //gl.uniform3fv(program.light0Position,[0.0, 0.0, 0.0]);
+
+    //================== ADD TEXTURE =============================
+    // need to load multiple textures
+    var addTex = function (image) {
+        var textureImage = new Image(); // holds image to be textured
+        textureImage.src = image;       // assign image to texture source
+        var tex = gl.createTexture();   // holds complete texture
+
+        textureImage.onload = function () {
+            // Check if power of two
+            var isPowerOfTwo = function (value) {
+                return (value & (value - 1)) == 0;
+            };
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, textureImage);
+            if (isPowerOfTwo(textureImage.width) && isPowerOfTwo(textureImage.height)) {
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.generateMipmap(gl.TEXTURE_2D);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+            } else {
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            }
+            frame = requestAnimationFrame(display);
+        }
+        return tex;
+    }
+
+    // Add different textures -----------------------------------------
+    program.tabletexture = addTex("marble.jpg");
+    program.bottletexture = addTex("complete_wine_label.png");
+    program.glasstexture = addTex("wood.jpg");
+
+    //=============== MORE BOILERPLATE ==========================
+    gl.clearColor(0.0,0.0,0.0,0.0);
+    Projection = new Matrix4x4;
+    Projection.perspective(40, 1, 0.1, 100);
+    View = new Matrix4x4;
+    Model = new Matrix4x4;
+    Texture = new Matrix4x4;
+
+    camera = {};
+    camera.lookat = {x : 0, y : 0, z : 0.2};
+    camera.distance = 6;
+    camera.phi = Math.PI/6;
+    camera.theta = Math.PI/4;
+
+    gl.viewport(0,0,canvas.width,canvas.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.lineWidth(2.0);
+
+}
+
+function getCameraPosition() {
+    var d_cos_phi = camera.distance*Math.cos(camera.phi);
+    camera.x = d_cos_phi*Math.sin(camera.theta) + camera.lookat.x;
+    camera.y = d_cos_phi*Math.cos(camera.theta) + camera.lookat.y;
+    camera.z = camera.distance*Math.sin(camera.phi) + camera.lookat.z;
+}
+
+function drawPolyTriangles(tmp) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, tmp.vertbuffer);
+    gl.enableVertexAttribArray(program.vertexPosition);
+    gl.vertexAttribPointer(program.vertexPosition, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, tmp.normalbuffer);
+    gl.enableVertexAttribArray(program.vertexNormal);
+    gl.vertexAttribPointer(program.vertexNormal, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, tmp.texCoordBuffer);
+    gl.enableVertexAttribArray(program.vertexTexCoord);
+    gl.vertexAttribPointer(program.vertexTexCoord, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, tmp.triangleStripBuffer);
+    gl.drawElements(gl.TRIANGLE_STRIP, tmp.triangleStrip.length, gl.UNSIGNED_SHORT, 0);
+}
+
+
+function loadUniforms(mat) {
+    var NormalMatrix = mat.normal();
+    var MVP = Projection.mult(mat);
+    gl.uniformMatrix4fv(program.ModelViewProjection, false, MVP.array);
+    gl.uniformMatrix4fv(program.ModelViewMatrix, false, mat.array);
+    gl.uniformMatrix3fv(program.NormalMatrix, false, NormalMatrix);
+    gl.uniformMatrix4fv(program.TextureMatrix, false, Texture.array);
+}
+
+//=================== DISPLAY FUNCTION =========================
+function display(){
+    frame = undefined;
+    var matrixStack = new Matrix4x4Stack();
+
+    //gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // clear the stencil buffer as well
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+    getCameraPosition();
+    View.identity();
+    View.lookat(camera.x, camera.y, camera.z,camera.lookat.x, camera.lookat.y, camera.lookat.z, 0, 0, 1);
+    var ModelView = View.mult(Model);
+    var NormalMatrix = ModelView.normal();
+    var MVP = Projection.mult(ModelView);
+    gl.uniformMatrix4fv(program.ModelViewMatrix, false, ModelView.array);
+    gl.uniformMatrix3fv(program.NormalMatrix, false, NormalMatrix);
+    gl.uniformMatrix4fv(program.ModelViewProjection, false, MVP.array);
+    gl.uniformMatrix4fv(program.TextureMatrix, false, Texture.array);
+
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 1.0);
+
+
+    //====================== DRAW EVERYTHING  ========================
+    // (set up)
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.BLEND);
+
+    // Bottle -----------------------------------------------------
+    gl.bindTexture(gl.TEXTURE_2D, program.bottletexture);
+
+    matrixStack.push(ModelView);    // push the untouched state
+    ModelView.scale(1.5,1.5,1.5);
+    loadUniforms(ModelView);
+    drawPolyTriangles(bottle);      // draw object
+    matrixStack.pop(ModelView);     // get untouched state
+
+    // Glass -------------------------------------------------------
+    gl.bindTexture(gl.TEXTURE_2D, program.glasstexture);
+
+    matrixStack.push(ModelView);    // push the untouched state
+    ModelView.scale(1.5,1.5,1.5);
+    ModelView.translate(.4,0,0);
+    loadUniforms(ModelView);
+    drawPolyTriangles(glass);       // draw object
+    matrixStack.pop(ModelView);     // get untouched state
+
+    // Table -------------------------------------------------------
+    gl.bindTexture(gl.TEXTURE_2D, program.tabletexture);
+
+    matrixStack.push(ModelView);    // push the untouched state
+
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilFunc(gl.ALWAYS, 1, 1);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+
+    loadUniforms(ModelView);
+    drawPolyTriangles(table);       // draw object
+    matrixStack.pop(ModelView);     // get untouched state
+
+    //*** Every object is drawn ***
+
+    //========================= REFLECTION ==================================
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.stencilFunc(gl.EQUAL, 1, 1);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+
+    // bottle -------------------------------------------
+    matrixStack.push(ModelView);
+    var BottleReflection = new Matrix4x4().scale(1,1,-1);
+    ModelView.concat(BottleReflection);
+    // Simple inverse from pdf
+    var ViewBottleInverse = new Matrix4x4();
+    ViewBottleInverse.inverseLookat(camera.x, camera.y, camera.z, camera.lookat.x, camera.lookat.y, camera.lookat.z, 0,0,1);
+    var lightReflected_bottle = View.mult(BottleReflection.mult(ViewBottleInverse)).transform(light0Position);
+    gl.uniform4fv(program.light0Position, lightReflected_bottle);
+
+    ModelView.scale(1.5,1.5,1.5);
+    loadUniforms(ModelView);
+    drawPolyTriangles(bottle);
+    matrixStack.pop(ModelView);
+
+    // glass -------------------------------------------
+    matrixStack.push(ModelView);
+    var GlassReflection = new Matrix4x4().scale(1,1,-1);
+    ModelView.concat(GlassReflection);
+    var ViewGlassInverse = new Matrix4x4();
+    ViewGlassInverse.inverseLookat(camera.x, camera.y, camera.z, camera.lookat.x, camera.lookat.y, camera.lookat.z, 0,0,1);
+    var lightReflectLight_glass = View.mult(GlassReflection.mult(ViewGlassInverse)).transform(light0Position);
+    gl.uniform4fv(program.light0Position, lightReflectLight_glass);
+
+    ModelView.scale(1.5,1.5,1.5);
+    ModelView.translate(0.4, 0, 0);
+    loadUniforms(ModelView);
+    drawPolyTriangles(glass);
+    matrixStack.pop(ModelView);
+
+    // Restore Light Position -------------------------------
+    gl.uniform4fv(program.light0Position, light0Position);
+
+    // ALPHA blend table top ---------------------------------
+    gl.enable(gl.BLEND);
+    gl.blendColor(1,1,1,0.7);
+    gl.blendFunc(gl.CONSTANT_ALPHA, gl.ONE_MINUS_CONSTANT_ALPHA);
+    loadUniforms(ModelView);
+    drawPolyTriangles(table);
+
+    //========================= SHADOWS ================================
+    // Setup ----------------------------------------------
+    gl.blendColor(0,0,0,0.7);
+    gl.blendFunc(gl.CONSTANT_COLOR, gl.DST_COLOR);
+    gl.stencilFunc(gl.EQUAL, 1, 1);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.ZERO);
+
+    var L = ViewBottleInverse.transform(light0Position);
+    ModelView.shadow(L, [0, 0, 1, 0]);
+    // Bottle ---------------------------------------------
+    matrixStack.push(ModelView);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(-1.0, -1.0);
+
+    ModelView.scale(1.5,1.5,1.5);
+    loadUniforms(ModelView);
+    drawPolyTriangles(bottle);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    matrixStack.pop(ModelView);
+
+    // Glass ----------------------------------------------
+    matrixStack.push(ModelView);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(-1.0, -1.0);
+
+    ModelView.scale(1.5,1.5,1.5);
+    ModelView.translate(0.4, 0, 0);
+
+    loadUniforms(ModelView);
+    drawPolyTriangles(glass);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    matrixStack.pop(ModelView);
+
+    // FLUSH at end ------------------------
+    gl.flush();
+}
+
+//-------------------------------------------------------------------------------</script>
+    
+
+</head>
+<body onload="init(); display()">
+
+<h1>Shadow and Refection</h1>
+
+<canvas id="myCanvas" width="600" height="600"></canvas><br />
+Click and drag to rotate...<br />
+
+<hr>
+<footer>
+    Spencer Kitchen<br />
+    December 6, 2016
+</footer>
+
+</body>
+</html>
+
