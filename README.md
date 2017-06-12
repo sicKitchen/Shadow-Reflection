@@ -39,4 +39,5 @@ Tested on Safari and Chrome
 
 ## Authors
 * **Spencer Kitchen** - Dec 13 2016
+email: sckitchen.dev@gmail.com
 
